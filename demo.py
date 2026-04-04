@@ -16,8 +16,7 @@ from pathlib import Path
 import numpy as np
 from openai import OpenAI
 
-LLM_OVMS_URLS = ("http://127.0.0.1:8000/v3", "http://localhost:8000/v3")
-WHISPER_OVMS_URLS = ("http://127.0.0.1:8001/v3", "http://localhost:8001/v3")
+OVMS_URLS = ("http://127.0.0.1:8000/v3", "http://localhost:8000/v3")
 LLM_MODEL = "tinyllama"
 WHISPER_MODEL = "OpenVINO/whisper-base-fp16-ov"
 SAMPLE_RATE = 16000
@@ -50,50 +49,40 @@ def write_wav(path: str | Path, audio: np.ndarray) -> None:
 
 def connect_chat_client() -> OpenAI:
     last_error = None
-    for url in LLM_OVMS_URLS:
+    for url in OVMS_URLS:
         try:
             client = OpenAI(base_url=url, api_key="none")
             models = client.models.list()
             names = [model.id for model in models.data]
-            print(f"OVMS chat connected ({url}): {names}")
-            if LLM_MODEL not in names:
-                print(f"OVMS chat is reachable but model '{LLM_MODEL}' is not loaded.")
-                print("  -> Run `docker compose restart ovms` and try again.")
+            print(f"OVMS connected ({url}): {names}")
+            if LLM_MODEL not in names or WHISPER_MODEL not in names:
+                print("OVMS is reachable but required models are not fully loaded.")
+                print(f"  -> expected: {LLM_MODEL}, {WHISPER_MODEL}")
+                print("  -> Run `python setup_ovms.py` and `docker compose restart ovms`.")
                 sys.exit(1)
             return client
         except Exception as exc:
             last_error = exc
 
-    print(f"OVMS chat connection failed: {last_error}")
+    print(f"OVMS connection failed: {last_error}")
     print("  -> Run `docker compose up -d ovms` and try again.")
     sys.exit(1)
 
 
-def transcribe_audio(audio_path: str | Path) -> str:
-    last_error = None
-    for url in WHISPER_OVMS_URLS:
-        try:
-            candidate = OpenAI(base_url=url, api_key="none")
-            with open(audio_path, "rb") as audio_file:
-                transcript = candidate.audio.transcriptions.create(
-                    model=WHISPER_MODEL,
-                    file=audio_file,
-                )
-            print(f"OVMS speech connected ({url})")
-            return transcript.text.strip()
-        except Exception as exc:
-            last_error = exc
-
-    print(f"OVMS speech connection failed: {last_error}")
-    print("  -> Run `docker compose up -d ovms-whisper` and try again.")
-    sys.exit(1)
+def transcribe_audio(client: OpenAI, audio_path: str | Path) -> str:
+    with open(audio_path, "rb") as audio_file:
+        transcript = client.audio.transcriptions.create(
+            model=WHISPER_MODEL,
+            file=audio_file,
+        )
+    return transcript.text.strip()
 
 
 def main() -> None:
     text_mode = "--text" in sys.argv
     wav_file = next((arg for arg in sys.argv[1:] if arg.lower().endswith(".wav")), None)
 
-    chat_client = connect_chat_client()
+    client = connect_chat_client()
     print("Ready (Ctrl+C to stop)\n")
 
     while True:
@@ -119,7 +108,7 @@ def main() -> None:
                 audio_path = temp_wav
 
             if audio_path is not None and not text_mode:
-                text = transcribe_audio(audio_path)
+                text = transcribe_audio(client, audio_path)
                 print(f"[Whisper] {text}\n")
 
             if not text:
@@ -129,7 +118,7 @@ def main() -> None:
                 continue
 
             print("[TinyLlama] ", end="", flush=True)
-            for chunk in chat_client.chat.completions.create(
+            for chunk in client.chat.completions.create(
                 model=LLM_MODEL,
                 messages=[{"role": "user", "content": text}],
                 max_tokens=256,

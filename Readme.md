@@ -1,12 +1,12 @@
 # OVMS Docker Demo - Whisper + TinyLlama
 
-OpenVINO Model Server (OVMS) only demo.
+OpenVINO Model Server (OVMS) only demo with a single OVMS container.
 
 ```text
 Audio (mic / WAV)
     |
     v
-Whisper        -> OVMS (`/v3/audio/transcriptions`, port 8001)
+Whisper        -> OVMS (`/v3/audio/transcriptions`, port 8000)
     |
     v
 TinyLlama      -> OVMS (`/v3/chat/completions`, port 8000)
@@ -17,24 +17,25 @@ Response
 
 ## Setup
 
-### 1. Prepare TinyLlama
+### 1. Prepare OVMS model repository
 
 ```bash
-python setup.py
+python setup_ovms.py
 ```
 
-`models/tinyllama/` is exported in OpenVINO format.
+This prepares a single `models/` repository for OVMS:
+
+- exports `TinyLlama/TinyLlama-1.1B-Chat-v1.0` into `models/tinyllama/`
+- pulls `OpenVINO/whisper-base-fp16-ov` into `models/OpenVINO/...`
+- creates `models/config.json` for both models
 
 ### 2. Start OVMS
 
 ```bash
-docker compose --profile serve up -d ovms ovms-whisper
+docker compose up -d ovms
 ```
 
-`ovms` serves TinyLlama on port `8000`.
-`ovms-whisper` serves Whisper on port `8001`.
-
-The Whisper container pulls `OpenVINO/whisper-base-fp16-ov` on first start, so the first boot can take a while.
+The single `ovms` service serves both TinyLlama and Whisper on port `8000`.
 
 ### 3. Install Python packages
 
@@ -59,13 +60,13 @@ python demo.py --text
 
 | File | Purpose |
 |---|---|
-| `docker-compose.yml` | OVMS services for TinyLlama and Whisper |
+| `docker-compose.yml` | Single OVMS service |
 | `demo.py` | Client app using OVMS OpenAI-compatible APIs |
-| `setup.py` | TinyLlama export script |
+| `setup_ovms.py` | Prepares TinyLlama, Whisper, and `config.json` for OVMS |
 | `requirements.txt` | Python runtime dependencies |
 
 ## Notes
 
 - TinyLlama runs through OVMS chat completions.
 - Whisper runs through OVMS audio transcriptions.
-- `models/whisper/` is no longer used by `demo.py`.
+- Both models are mounted into one OVMS container via `./models:/models`.

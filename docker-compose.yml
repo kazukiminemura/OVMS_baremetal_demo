@@ -1,18 +1,8 @@
 services:
   ovms:
     image: openvino/model_server:latest
-    profiles: ["serve"]
     volumes:
       - ./models:/models
     ports:
       - "8000:8000"
     command: --config_path /models/config.json --rest_port 8000
-
-  ovms-whisper:
-    image: openvino/model_server:latest
-    profiles: ["serve"]
-    volumes:
-      - ./models/whisper_ovms:/models
-    ports:
-      - "8001:8000"
-    command: --rest_port 8000 --source_model OpenVINO/whisper-base-fp16-ov --model_repository_path /models --model_name OpenVINO/whisper-base-fp16-ov --task speech2text --target_device CPU
