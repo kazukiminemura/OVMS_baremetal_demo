@@ -1,0 +1,4 @@
+openvino-genai>=2024.4
+openai>=1.0
+sounddevice
+numpy
