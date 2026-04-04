@@ -1,37 +1,8 @@
-version: "3.8"
-
 services:
-  # Step 1: モデルをダウンロード＆OpenVINO形式に変換 (初回のみ)
-  prep:
-    image: python:3.11-slim
+  ovms:
+    image: openvino/model_server:latest
     volumes:
       - ./models:/models
-    environment:
-      - HF_HUB_DISABLE_PROGRESS_BARS=1
-    command: >
-      bash -c "
-        pip install -q 'optimum[openvino]>=1.18' &&
-        echo '=== TinyLlama を変換中 (int8量子化) ===' &&
-        optimum-cli export openvino
-          -m TinyLlama/TinyLlama-1.1B-Chat-v1.0
-          --weight-format int8
-          --task text-generation-with-past
-          /models/tinyllama &&
-        echo '=== Whisper base を変換中 ===' &&
-        optimum-cli export openvino
-          -m openai/whisper-base
-          --task automatic-speech-recognition
-          /models/whisper &&
-        echo '=== 変換完了 ==='
-      "
-
-  # Step 2: OVMS で TinyLlama を配信
-  ovms:
-    image: openvino/model_server:2024.4
-    volumes:
-      - ./models/tinyllama:/model
     ports:
       - "8000:8000"
-    command: --model_path /model --model_name tinyllama --rest_port 8000
-    profiles:
-      - serve
+    command: --config_path /models/config.json --rest_port 8000

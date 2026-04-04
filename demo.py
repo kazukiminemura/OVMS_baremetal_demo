@@ -14,7 +14,7 @@ import numpy as np
 import openvino_genai as ov
 from openai import OpenAI
 
-OVMS_URL    = "http://localhost:8000/v3"
+OVMS_URLS   = ("http://127.0.0.1:8000/v3", "http://localhost:8000/v3")
 SAMPLE_RATE = 16000
 
 
@@ -38,9 +38,34 @@ def main():
     text_mode = "--text" in sys.argv
     wav_file  = next((a for a in sys.argv[1:] if a.endswith(".wav")), None)
 
-    print("Whisper を読み込み中...")
-    whisper = ov.WhisperPipeline("models/whisper", "CPU")
-    llm     = OpenAI(base_url=OVMS_URL, api_key="none")
+    whisper = None
+    if not text_mode and not wav_file:
+        print("Whisper を読み込み中...")
+        whisper = ov.WhisperPipeline("models/whisper", "CPU")
+
+    llm = None
+    names = []
+    last_error = None
+    for url in OVMS_URLS:
+        try:
+            candidate = OpenAI(base_url=url, api_key="none")
+            models = candidate.models.list()
+            llm = candidate
+            names = [m.id for m in models.data]
+            print(f"OVMS 接続OK ({url}): {names}")
+            break
+        except Exception as e:
+            last_error = e
+
+    if llm is None:
+        print(f"OVMS 接続失敗: {last_error}")
+        print("  → docker compose up -d ovms を実行してください")
+        sys.exit(1)
+
+    if "tinyllama" not in names:
+        print("OVMS には接続できましたが、モデル 'tinyllama' がロードされていません。")
+        print("  → docker compose restart ovms を実行してから再度お試しください")
+        sys.exit(1)
 
     print("準備完了! (Ctrl+C で終了)\n")
 
@@ -49,14 +74,18 @@ def main():
         if wav_file:
             audio = load_wav(wav_file)
         elif text_mode:
-            text = input("あなた: ").strip()
+            try:
+                text = input("あなた: ").strip()
+            except EOFError:
+                print()
+                break
             audio = None
         else:
             input("Enterキーで話す...")
             audio = record_audio()
 
         # --- Whisper 文字起こし ---
-        if audio is not None:
+        if audio is not None and whisper is not None:
             text = whisper.generate(audio).strip()
             print(f"[Whisper] {text}\n")
 
