@@ -146,6 +146,12 @@ def write_base_config() -> None:
                     "name": "tinyllama",
                     "base_path": "/models/tinyllama",
                 }
+            },
+            {
+                "config": {
+                    "name": WHISPER_MODEL_NAME,
+                    "base_path": f"/models/OpenVINO/{WHISPER_MODEL_NAME}",
+                }
             }
         ]
     }
@@ -175,23 +181,9 @@ def prepare_whisper() -> None:
             "speech2text",
         ]
     )
-    run(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "-v",
-            repo_mount,
-            OVMS_IMAGE,
-            "--add_to_config",
-            "--config_path",
-            "/models/config.json",
-            "--model_path",
-            WHISPER_MODEL_NAME,
-            "--model_name",
-            WHISPER_MODEL_NAME,
-        ]
-    )
+    git_dir = MODEL_REPOSITORY / "OpenVINO" / WHISPER_MODEL_NAME / ".git"
+    if git_dir.exists():
+        shutil.rmtree(git_dir)
 
 
 def main() -> None:
