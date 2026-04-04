@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -20,8 +21,9 @@ TINYLLAMA_DIR = MODEL_REPOSITORY / "tinyllama"
 CONFIG_PATH = MODEL_REPOSITORY / "config.json"
 WHISPER_SOURCE_MODEL = "OpenVINO/whisper-base-fp16-ov"
 WHISPER_MODEL_NAME = "whisper-base-fp16-ov"
-OVMS_IMAGE = "openvino/model_server:latest"
-TARGET_DEVICE = os.environ.get("OVMS_TARGET_DEVICE", "CPU").upper()
+OVMS_IMAGE = "openvino/model_server:latest-gpu"
+TARGET_DEVICE = os.environ.get("OVMS_TARGET_DEVICE", "GPU").upper()
+DOCKER_CMD = shlex.split(os.environ.get("OVMS_DOCKER_CMD", "wsl docker"))
 
 TINYLLAMA_REQUIRED_FILES = [
     "openvino_model.xml",
@@ -77,6 +79,18 @@ def run(cmd: list[str], *, cwd: Path | None = None) -> None:
         sys.exit(result.returncode)
 
 
+def capture(cmd: list[str]) -> str:
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONUTF8": "1"},
+    )
+    if result.returncode != 0:
+        sys.exit(result.returncode)
+    return result.stdout.strip()
+
+
 def find_optimum_cli() -> str:
     scripts_dir = Path(sys.executable).resolve().parent
     cli = (
@@ -107,6 +121,13 @@ def validate_target_device() -> None:
     if TARGET_DEVICE not in {"CPU", "GPU"}:
         print("Error: OVMS_TARGET_DEVICE must be CPU or GPU.")
         sys.exit(1)
+
+
+def get_repo_mount_path() -> str:
+    repo_path = MODEL_REPOSITORY.resolve()
+    if DOCKER_CMD[:1] == ["wsl"]:
+        return capture(["wsl", "wslpath", "-a", str(repo_path)])
+    return str(repo_path)
 
 
 def has_required_files(model_dir: Path, required_files: list[str]) -> bool:
@@ -159,10 +180,10 @@ def write_base_config() -> None:
 
 
 def prepare_whisper() -> None:
-    repo_mount = f"{MODEL_REPOSITORY.resolve()}:/models"
+    repo_mount = f"{get_repo_mount_path()}:/models"
     run(
-        [
-            "docker",
+        DOCKER_CMD
+        + [
             "run",
             "--rm",
             "-v",
@@ -188,13 +209,14 @@ def prepare_whisper() -> None:
 
 def main() -> None:
     validate_target_device()
-    ensure_tool("docker")
+    ensure_tool(DOCKER_CMD[0])
     export_tinyllama()
     write_base_config()
     prepare_whisper()
     print(f"[done] Prepared OVMS repository in {MODEL_REPOSITORY}")
     print(f"[done] Target device: {TARGET_DEVICE}")
-    print("Next: docker compose up -d ovms")
+    print(f"[done] Docker command: {' '.join(DOCKER_CMD)}")
+    print("Next: wsl docker compose up -d ovms")
 
 
 if __name__ == "__main__":

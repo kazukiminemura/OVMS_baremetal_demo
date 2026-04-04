@@ -58,14 +58,14 @@ def connect_chat_client() -> OpenAI:
             if LLM_MODEL not in names or WHISPER_MODEL not in names:
                 print("OVMS is reachable but required models are not fully loaded.")
                 print(f"  -> expected: {LLM_MODEL}, {WHISPER_MODEL}")
-                print("  -> Run `python setup_ovms.py` and `docker compose restart ovms`.")
+                print("  -> Run `python setup_ovms.py` and `wsl docker compose restart ovms`.")
                 sys.exit(1)
             return client
         except Exception as exc:
             last_error = exc
 
     print(f"OVMS connection failed: {last_error}")
-    print("  -> Run `docker compose up -d ovms` and try again.")
+    print("  -> Run `wsl docker compose up -d ovms` and try again.")
     sys.exit(1)
 
 
