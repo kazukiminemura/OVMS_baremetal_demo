@@ -10,6 +10,7 @@ Usage:
 """
 import sys
 import tempfile
+import time
 import wave
 from pathlib import Path
 
@@ -20,6 +21,8 @@ OVMS_URLS = ("http://127.0.0.1:8000/v3", "http://localhost:8000/v3")
 LLM_MODEL = "tinyllama"
 WHISPER_MODEL = "whisper-base-fp16-ov"
 SAMPLE_RATE = 16000
+MODEL_WAIT_TIMEOUT = 60
+MODEL_WAIT_INTERVAL = 2
 
 
 def record_audio(seconds: int = 5) -> np.ndarray:
@@ -52,15 +55,20 @@ def connect_chat_client() -> OpenAI:
     for url in OVMS_URLS:
         try:
             client = OpenAI(base_url=url, api_key="none")
-            models = client.models.list()
-            names = [model.id for model in models.data]
-            print(f"OVMS connected ({url}): {names}")
-            if LLM_MODEL not in names or WHISPER_MODEL not in names:
-                print("OVMS is reachable but required models are not fully loaded.")
-                print(f"  -> expected: {LLM_MODEL}, {WHISPER_MODEL}")
-                print("  -> Run `python setup_ovms.py` and `wsl docker compose restart ovms`.")
-                sys.exit(1)
-            return client
+            deadline = time.time() + MODEL_WAIT_TIMEOUT
+            while True:
+                models = client.models.list()
+                names = [model.id for model in models.data]
+                print(f"OVMS connected ({url}): {names}")
+                if LLM_MODEL in names and WHISPER_MODEL in names:
+                    return client
+                if time.time() >= deadline:
+                    print("OVMS is reachable but required models are not fully loaded.")
+                    print(f"  -> expected: {LLM_MODEL}, {WHISPER_MODEL}")
+                    print("  -> Run `python setup_ovms.py` and `wsl docker compose restart ovms`.")
+                    sys.exit(1)
+                print("  -> waiting for OVMS to finish loading models...")
+                time.sleep(MODEL_WAIT_INTERVAL)
         except Exception as exc:
             last_error = exc
 
