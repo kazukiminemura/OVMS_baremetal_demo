@@ -1,71 +1,71 @@
-# OVMS Docker Demo — Whisper + TinyLlama
+# OVMS Docker Demo - Whisper + TinyLlama
 
-OpenVINO Model Server (OVMS) を使った音声対話デモ。
+OpenVINO Model Server (OVMS) only demo.
 
+```text
+Audio (mic / WAV)
+    |
+    v
+Whisper        -> OVMS (`/v3/audio/transcriptions`, port 8001)
+    |
+    v
+TinyLlama      -> OVMS (`/v3/chat/completions`, port 8000)
+    |
+    v
+Response
 ```
-音声 (マイク/WAV)
-    │
-    ▼
-Whisper base  ← OpenVINO GenAI (ローカル実行)
-    │ テキスト
-    ▼
-TinyLlama     ← OVMS (Docker)  /v3/chat/completions
-    │
-    ▼
-  応答出力
-```
 
----
+## Setup
 
-## セットアップ
-
-### 1. モデル変換（初回のみ・数分かかります）
+### 1. Prepare TinyLlama
 
 ```bash
-docker compose run --rm prep
+python setup.py
 ```
 
-`models/tinyllama/` と `models/whisper/` に OpenVINO 形式で保存されます。
+`models/tinyllama/` is exported in OpenVINO format.
 
-### 2. OVMS を起動
+### 2. Start OVMS
 
 ```bash
-docker compose --profile serve up -d ovms
+docker compose --profile serve up -d ovms ovms-whisper
 ```
 
-### 3. Python 依存パッケージのインストール
+`ovms` serves TinyLlama on port `8000`.
+`ovms-whisper` serves Whisper on port `8001`.
+
+The Whisper container pulls `OpenVINO/whisper-base-fp16-ov` on first start, so the first boot can take a while.
+
+### 3. Install Python packages
 
 ```bash
 pip install -r requirements.txt
 ```
 
----
-
-## デモ実行
+## Run
 
 ```bash
-# マイク入力モード
+# microphone mode
 python demo.py
 
-# WAVファイル指定
+# WAV file mode
 python demo.py audio.wav
 
-# テキスト入力モード（マイクなし）
+# text-only mode
 python demo.py --text
 ```
 
----
+## Files
 
-## 構成ファイル
-
-| ファイル | 役割 |
+| File | Purpose |
 |---|---|
-| `docker-compose.yml` | モデル変換 + OVMS 起動 |
-| `demo.py` | デモ本体（約60行） |
-| `requirements.txt` | Python 依存パッケージ |
+| `docker-compose.yml` | OVMS services for TinyLlama and Whisper |
+| `demo.py` | Client app using OVMS OpenAI-compatible APIs |
+| `setup.py` | TinyLlama export script |
+| `requirements.txt` | Python runtime dependencies |
 
-## ポイント
+## Notes
 
-- **OVMS**: TinyLlama を OpenAI 互換 API (`/v3/chat/completions`) で提供
-- **openvino_genai**: Whisper をローカルで実行（前処理を含め1行で動作）
-- **int8 量子化**: TinyLlama を int8 に量子化してメモリ削減
+- TinyLlama runs through OVMS chat completions.
+- Whisper runs through OVMS audio transcriptions.
+- `models/whisper/` is no longer used by `demo.py`.

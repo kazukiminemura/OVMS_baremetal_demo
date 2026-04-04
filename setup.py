@@ -1,67 +1,70 @@
 #!/usr/bin/env python3
 """
-モデルのダウンロード＆OpenVINO変換スクリプト
-実行: python setup.py
+TinyLlama export script for OVMS demo.
 
-必要: pip install 'optimum[openvino]>=1.18'
+Required:
+  pip install "optimum[openvino]>=1.18"
 """
-import subprocess, sys, os, shutil
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 
-MODELS = [
-    {
-        "name": "TinyLlama (LLM)",
-        "model_id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-        "out": "models/tinyllama",
-        "args": ["--weight-format", "int8", "--task", "text-generation-with-past"],
-        "required_files": [
-            "openvino_model.xml",
-            "openvino_model.bin",
-            "openvino_tokenizer.xml",
-            "openvino_tokenizer.bin",
-            "openvino_detokenizer.xml",
-            "openvino_detokenizer.bin",
-        ],
-    },
-    {
-        "name": "Whisper base (音声認識)",
-        "model_id": "openai/whisper-base",
-        "out": "models/whisper",
-        "args": ["--task", "automatic-speech-recognition"],
-        "required_files": [
-            "openvino_encoder_model.xml",
-            "openvino_encoder_model.bin",
-            "openvino_decoder_model.xml",
-            "openvino_decoder_model.bin",
-            "openvino_tokenizer.xml",
-            "openvino_tokenizer.bin",
-            "openvino_detokenizer.xml",
-            "openvino_detokenizer.bin",
-        ],
-    },
-]
+MODEL = {
+    "name": "TinyLlama (LLM)",
+    "model_id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    "out": "models/tinyllama",
+    "args": ["--weight-format", "int8", "--task", "text-generation-with-past"],
+    "required_files": [
+        "openvino_model.xml",
+        "openvino_model.bin",
+        "openvino_tokenizer.xml",
+        "openvino_tokenizer.bin",
+        "openvino_detokenizer.xml",
+        "openvino_detokenizer.bin",
+    ],
+}
 
-cli = shutil.which("optimum-cli")
+
+def has_required_files(model_dir: str, required_files: list[str]) -> bool:
+    return os.path.isdir(model_dir) and all(
+        os.path.exists(os.path.join(model_dir, required))
+        for required in required_files
+    )
+
+
+scripts_dir = Path(sys.executable).resolve().parent
+cli = (
+    shutil.which("optimum-cli")
+    or shutil.which("optimum-cli.exe")
+    or next(
+        (
+            str(path)
+            for path in (scripts_dir / "optimum-cli.exe", scripts_dir / "optimum-cli")
+            if path.exists()
+        ),
+        None,
+    )
+)
+
 if cli is None:
-    print("エラー: optimum-cli が見つかりません")
-    print("  pip install 'optimum[openvino]>=1.18' を実行してください")
+    print("Error: optimum-cli was not found")
+    print('  Run `pip install "optimum[openvino]>=1.18"` and try again.')
     sys.exit(1)
 
-for m in MODELS:
-    if os.path.isdir(m["out"]) and all(
-        os.path.exists(os.path.join(m["out"], required))
-        for required in m["required_files"]
-    ):
-        print(f"[スキップ] {m['name']} は変換済み")
-        continue
-    print(f"[変換中] {m['name']} ...")
-    cmd = [cli, "export", "openvino", "-m", m["model_id"]] + m["args"] + [m["out"]]
-    env = os.environ.copy()
-    env["PYTHONUTF8"] = "1"
-    result = subprocess.run(cmd, env=env)
-    if result.returncode != 0:
-        print(f"エラー: {m['name']} の変換に失敗しました")
-        sys.exit(1)
-    print(f"[完了] {m['out']}")
+if has_required_files(MODEL["out"], MODEL["required_files"]):
+    print(f"[skip] {MODEL['name']} is already exported")
+    sys.exit(0)
 
-print("\n全モデルの準備が完了しました!")
-print("次のステップ: docker compose up -d")
+print(f"[exporting] {MODEL['name']} ...")
+cmd = [cli, "export", "openvino", "-m", MODEL["model_id"]] + MODEL["args"] + [MODEL["out"]]
+env = os.environ.copy()
+env["PYTHONUTF8"] = "1"
+result = subprocess.run(cmd, env=env)
+if result.returncode != 0:
+    print(f"Error: failed to export {MODEL['name']}")
+    sys.exit(1)
+
+print(f"[done] {MODEL['out']}")
+print("Next: docker compose --profile serve up -d ovms ovms-whisper")
