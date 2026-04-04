@@ -1,6 +1,7 @@
 services:
   ovms:
     image: openvino/model_server:latest-gpu
+    restart: unless-stopped
     volumes:
       - ./models:/models
       - /usr/lib/wsl:/usr/lib/wsl

@@ -15,7 +15,9 @@ import wave
 from pathlib import Path
 
 import numpy as np
+import httpx
 from openai import OpenAI
+from openai import APIConnectionError
 
 OVMS_URLS = ("http://127.0.0.1:8000/v3", "http://localhost:8000/v3")
 LLM_MODEL = "tinyllama"
@@ -23,6 +25,7 @@ WHISPER_MODEL = "whisper-base-fp16-ov"
 SAMPLE_RATE = 16000
 MODEL_WAIT_TIMEOUT = 60
 MODEL_WAIT_INTERVAL = 2
+CHAT_RETRY_COUNT = 2
 
 
 def record_audio(seconds: int = 5) -> np.ndarray:
@@ -86,6 +89,24 @@ def transcribe_audio(client: OpenAI, audio_path: str | Path) -> str:
     return transcript.text.strip()
 
 
+def stream_chat_completion(client: OpenAI, text: str) -> OpenAI:
+    return client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "user", "content": text}],
+        max_tokens=256,
+        stream=True,
+    )
+
+
+def create_chat_completion(client: OpenAI, text: str):
+    return client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "user", "content": text}],
+        max_tokens=256,
+        stream=False,
+    )
+
+
 def main() -> None:
     text_mode = "--text" in sys.argv
     wav_file = next((arg for arg in sys.argv[1:] if arg.lower().endswith(".wav")), None)
@@ -126,14 +147,30 @@ def main() -> None:
                 continue
 
             print("[TinyLlama] ", end="", flush=True)
-            for chunk in client.chat.completions.create(
-                model=LLM_MODEL,
-                messages=[{"role": "user", "content": text}],
-                max_tokens=256,
-                stream=True,
-            ):
-                print(chunk.choices[0].delta.content or "", end="", flush=True)
-            print("\n")
+            for attempt in range(CHAT_RETRY_COUNT + 1):
+                try:
+                    for chunk in stream_chat_completion(client, text):
+                        print(chunk.choices[0].delta.content or "", end="", flush=True)
+                    print("\n")
+                    break
+                except (APIConnectionError, httpx.RemoteProtocolError):
+                    if attempt >= CHAT_RETRY_COUNT:
+                        print("\n[system] Streaming failed. Falling back to non-streaming response...\n")
+                        response = create_chat_completion(client, text)
+                        print(response.choices[0].message.content or "", end="", flush=True)
+                        print("\n")
+                        break
+                    print("\n[system] OVMS connection lost. Reconnecting...\n")
+                    time.sleep(MODEL_WAIT_INTERVAL)
+                    client = connect_chat_client()
+                    print("[TinyLlama] ", end="", flush=True)
+                except httpx.HTTPError:
+                    if attempt >= CHAT_RETRY_COUNT:
+                        raise
+                    print("\n[system] OVMS connection lost. Reconnecting...\n")
+                    time.sleep(MODEL_WAIT_INTERVAL)
+                    client = connect_chat_client()
+                    print("[TinyLlama] ", end="", flush=True)
 
             if wav_file:
                 break
