@@ -23,6 +23,15 @@ Response
 python setup_ovms.py
 ```
 
+`setup_ovms.py` prepares OVMS models for `CPU` by default.
+
+To prepare GPU-targeted models explicitly:
+
+```bash
+set OVMS_TARGET_DEVICE=GPU
+python setup_ovms.py
+```
+
 This prepares a single `models/` repository for OVMS:
 
 - exports `TinyLlama/TinyLlama-1.1B-Chat-v1.0` into `models/tinyllama/`
@@ -36,7 +45,7 @@ docker compose up -d ovms
 ```
 
 The single `ovms` service serves both TinyLlama and Whisper on port `8000`.
-It is configured for GPU execution using the OVMS GPU image and `/dev/dri` passthrough.
+The OVMS container uses the GPU-capable image. Actual model target device is chosen when running `setup_ovms.py`.
 
 ### 3. Install Python packages
 
@@ -57,6 +66,12 @@ python demo.py audio.wav
 python demo.py --text
 ```
 
+If you change `OVMS_TARGET_DEVICE` or regenerate models, restart OVMS:
+
+```bash
+docker compose restart ovms
+```
+
 ## Files
 
 | File | Purpose |
@@ -71,4 +86,14 @@ python demo.py --text
 - TinyLlama runs through OVMS chat completions.
 - Whisper runs through OVMS audio transcriptions.
 - Both models are mounted into one OVMS container via `./models:/models`.
-- GPU use requires a host/container runtime where Intel GPU devices are exposed to the container.
+- On Docker Desktop for Windows, Intel GPU passthrough may be unavailable depending on the WSL2/container setup. In that case, leave `OVMS_TARGET_DEVICE` unset and use CPU.
+
+## Troubleshooting
+
+- If `python demo.py` prints `OVMS connected ... []`, OVMS is running but failed to load the models. Re-run `python setup_ovms.py` and then `docker compose restart ovms`.
+- If OVMS logs show `Available devices for Open VINO: CPU`, GPU is not exposed to the container. Use CPU mode by leaving `OVMS_TARGET_DEVICE` unset.
+- If you want to inspect OVMS errors directly, run:
+
+```bash
+docker compose logs ovms --tail=200
+```

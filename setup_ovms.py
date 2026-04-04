@@ -21,6 +21,7 @@ CONFIG_PATH = MODEL_REPOSITORY / "config.json"
 WHISPER_SOURCE_MODEL = "OpenVINO/whisper-base-fp16-ov"
 WHISPER_MODEL_NAME = "whisper-base-fp16-ov"
 OVMS_IMAGE = "openvino/model_server:latest"
+TARGET_DEVICE = os.environ.get("OVMS_TARGET_DEVICE", "CPU").upper()
 
 TINYLLAMA_REQUIRED_FILES = [
     "openvino_model.xml",
@@ -51,7 +52,7 @@ node {
       cache_size: 10,
       max_num_batched_tokens: 512,
       max_num_seqs: 256,
-      device: "GPU"
+      device: "__TARGET_DEVICE__"
     }
   }
   input_stream_handler {
@@ -66,6 +67,7 @@ node {
   }
 }
 """
+TINYLLAMA_GRAPH = TINYLLAMA_GRAPH.replace("__TARGET_DEVICE__", TARGET_DEVICE)
 
 
 def run(cmd: list[str], *, cwd: Path | None = None) -> None:
@@ -98,6 +100,12 @@ def find_optimum_cli() -> str:
 def ensure_tool(name: str) -> None:
     if shutil.which(name) is None:
         print(f"Error: `{name}` was not found in PATH.")
+        sys.exit(1)
+
+
+def validate_target_device() -> None:
+    if TARGET_DEVICE not in {"CPU", "GPU"}:
+        print("Error: OVMS_TARGET_DEVICE must be CPU or GPU.")
         sys.exit(1)
 
 
@@ -162,7 +170,7 @@ def prepare_whisper() -> None:
             "--model_name",
             WHISPER_MODEL_NAME,
             "--target_device",
-            "GPU",
+            TARGET_DEVICE,
             "--task",
             "speech2text",
         ]
@@ -187,11 +195,13 @@ def prepare_whisper() -> None:
 
 
 def main() -> None:
+    validate_target_device()
     ensure_tool("docker")
     export_tinyllama()
     write_base_config()
     prepare_whisper()
     print(f"[done] Prepared OVMS repository in {MODEL_REPOSITORY}")
+    print(f"[done] Target device: {TARGET_DEVICE}")
     print("Next: docker compose up -d ovms")
 
 
