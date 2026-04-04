@@ -18,7 +18,8 @@ from pathlib import Path
 MODEL_REPOSITORY = Path("models")
 TINYLLAMA_DIR = MODEL_REPOSITORY / "tinyllama"
 CONFIG_PATH = MODEL_REPOSITORY / "config.json"
-WHISPER_MODEL_NAME = "OpenVINO/whisper-base-fp16-ov"
+WHISPER_SOURCE_MODEL = "OpenVINO/whisper-base-fp16-ov"
+WHISPER_MODEL_NAME = "whisper-base-fp16-ov"
 OVMS_IMAGE = "openvino/model_server:latest"
 
 TINYLLAMA_REQUIRED_FILES = [
@@ -50,7 +51,7 @@ node {
       cache_size: 10,
       max_num_batched_tokens: 512,
       max_num_seqs: 256,
-      device: "CPU"
+      device: "GPU"
     }
   }
   input_stream_handler {
@@ -155,9 +156,13 @@ def prepare_whisper() -> None:
             OVMS_IMAGE,
             "--pull",
             "--source_model",
-            WHISPER_MODEL_NAME,
+            WHISPER_SOURCE_MODEL,
             "--model_repository_path",
             "/models",
+            "--model_name",
+            WHISPER_MODEL_NAME,
+            "--target_device",
+            "GPU",
             "--task",
             "speech2text",
         ]

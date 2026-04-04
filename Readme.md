@@ -26,7 +26,7 @@ python setup_ovms.py
 This prepares a single `models/` repository for OVMS:
 
 - exports `TinyLlama/TinyLlama-1.1B-Chat-v1.0` into `models/tinyllama/`
-- pulls `OpenVINO/whisper-base-fp16-ov` into `models/OpenVINO/...`
+- pulls `OpenVINO/whisper-base-fp16-ov` into `models/whisper-base-fp16-ov/`
 - creates `models/config.json` for both models
 
 ### 2. Start OVMS
@@ -36,6 +36,7 @@ docker compose up -d ovms
 ```
 
 The single `ovms` service serves both TinyLlama and Whisper on port `8000`.
+It is configured for GPU execution using the OVMS GPU image and `/dev/dri` passthrough.
 
 ### 3. Install Python packages
 
@@ -70,3 +71,4 @@ python demo.py --text
 - TinyLlama runs through OVMS chat completions.
 - Whisper runs through OVMS audio transcriptions.
 - Both models are mounted into one OVMS container via `./models:/models`.
+- GPU use requires a host/container runtime where Intel GPU devices are exposed to the container.

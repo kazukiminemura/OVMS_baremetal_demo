@@ -18,7 +18,7 @@ from openai import OpenAI
 
 OVMS_URLS = ("http://127.0.0.1:8000/v3", "http://localhost:8000/v3")
 LLM_MODEL = "tinyllama"
-WHISPER_MODEL = "OpenVINO/whisper-base-fp16-ov"
+WHISPER_MODEL = "whisper-base-fp16-ov"
 SAMPLE_RATE = 16000
 
 

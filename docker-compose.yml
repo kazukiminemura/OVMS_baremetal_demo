@@ -1,8 +1,13 @@
 services:
   ovms:
-    image: openvino/model_server:latest
+    image: openvino/model_server:latest-gpu
     volumes:
       - ./models:/models
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
     ports:
       - "8000:8000"
     command: --config_path /models/config.json --rest_port 8000
