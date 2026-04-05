@@ -15,7 +15,64 @@ import subprocess
 import sys
 from pathlib import Path
 
-from huggingface_hub import snapshot_download
+try:
+    from huggingface_hub import snapshot_download
+except ModuleNotFoundError:
+    print("Installing missing dependency: huggingface_hub", file=sys.stderr)
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "huggingface_hub"])
+    from huggingface_hub import snapshot_download
+
+
+WHISPER_GRAPH_TEMPLATE = """input_stream: "HTTP_REQUEST_PAYLOAD:input"
+output_stream: "HTTP_RESPONSE_PAYLOAD:output"
+node {
+  name: "S2tExecutor"
+  input_side_packet: "STT_NODE_RESOURCES:s2t_servable"
+  calculator: "S2tCalculator"
+  input_stream: "HTTP_REQUEST_PAYLOAD:input"
+  output_stream: "HTTP_RESPONSE_PAYLOAD:output"
+  node_options: {
+    [type.googleapis.com / mediapipe.S2tCalculatorOptions]: {
+      models_path: "./",
+      plugin_config: '{ "NUM_STREAMS": "1" }',
+      target_device: "__TARGET_DEVICE__"
+    }
+  }
+}
+"""
+
+
+def cleanup_hf_cache(model_dir: str | Path) -> None:
+    model_path = Path(model_dir)
+
+    cache_dir = model_path / ".cache"
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+
+def ensure_whisper_speech2text_layout(model_dir: str | Path) -> None:
+    """
+    Arrange the Whisper snapshot for OVMS `speech2text` graph serving.
+
+    Unlike classic OVMS model serving, the speech2text MediaPipe graph expects the
+    Whisper OpenVINO files directly in the model directory next to `graph.pbtxt`.
+    """
+    model_path = Path(model_dir)
+    cleanup_hf_cache(model_path)
+
+    version_path = model_path / "1"
+    if version_path.is_dir():
+        for path in version_path.iterdir():
+            target = model_path / path.name
+            if not target.exists():
+                shutil.move(str(path), str(target))
+        shutil.rmtree(version_path, ignore_errors=True)
+
+    graph_path = model_path / "graph.pbtxt"
+    graph_path.write_text(
+        WHISPER_GRAPH_TEMPLATE.replace("__TARGET_DEVICE__", TARGET_DEVICE),
+        encoding="utf-8",
+    )
 
 MODEL_REPOSITORY = Path("models")
 TINYLLAMA_DIR = MODEL_REPOSITORY / "tinyllama"
@@ -42,7 +99,6 @@ WHISPER_REQUIRED_FILES = [
     "openvino_tokenizer.bin",
     "openvino_detokenizer.xml",
     "openvino_detokenizer.bin",
-    "graph.pbtxt",
 ]
 
 TINYLLAMA_GRAPH_TEMPLATE = """input_stream: "HTTP_REQUEST_PAYLOAD:input"
@@ -165,6 +221,7 @@ def write_base_config() -> None:
                 "config": {
                     "name": WHISPER_MODEL_NAME,
                     "base_path": normalize_path(WHISPER_DIR),
+                    "graph_path": "graph.pbtxt",
                 }
             }
         ]
@@ -173,20 +230,22 @@ def write_base_config() -> None:
 
 
 def prepare_whisper() -> None:
+    WHISPER_DIR.parent.mkdir(parents=True, exist_ok=True)
     if has_required_files(WHISPER_DIR, WHISPER_REQUIRED_FILES):
         print("[skip] Whisper is already downloaded")
-        return
-
-    WHISPER_DIR.parent.mkdir(parents=True, exist_ok=True)
-    snapshot_download(
-        repo_id=WHISPER_SOURCE_MODEL,
-        local_dir=str(WHISPER_DIR),
-        local_dir_use_symlinks=False,
-    )
+    else:
+        downloaded_model_path = snapshot_download(
+            repo_id=WHISPER_SOURCE_MODEL,
+            local_dir=str(WHISPER_DIR),
+            local_dir_use_symlinks=False,
+        )
+        cleanup_hf_cache(downloaded_model_path)
 
     git_dir = WHISPER_DIR / ".git"
     if git_dir.exists():
         shutil.rmtree(git_dir)
+
+    ensure_whisper_speech2text_layout(WHISPER_DIR)
 
 
 def main() -> None:

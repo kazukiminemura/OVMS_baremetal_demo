@@ -100,6 +100,14 @@ def transcribe_audio(client: OpenAI, audio_path: str | Path) -> tuple[str, OpenA
             print("[system] OVMS connection lost during transcription. Reconnecting...")
             time.sleep(MODEL_WAIT_INTERVAL)
             client = connect_chat_client(exit_on_failure=False)
+        except Exception as exc:
+            message = str(exc)
+            if "Mediapipe graph definition with requested name is not found" in message:
+                raise RuntimeError(
+                    "OVMS speech-to-text is not deployed for the requested Whisper model. "
+                    "Run `python setup_ovms.py`, restart OVMS with `./start_ovms.ps1`, and try again."
+                ) from exc
+            raise
     return "", client
 
 
@@ -202,14 +210,13 @@ def main() -> None:
             if wav_file:
                 break
         except (APIConnectionError, RuntimeError):
-            print("\n[system] OVMS connection failed during inference.")
+            print("\n[system] Inference failed.")
             print("  -> Start OVMS with `./start_ovms.ps1` and try again.\n")
             if wav_file:
                 break
         finally:
             if temp_wav is not None:
                 Path(temp_wav).unlink(missing_ok=True)
-
 
 if __name__ == "__main__":
     main()
