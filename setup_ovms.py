@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Prepare a single OVMS model repository with TinyLlama and Whisper.
+Prepare a single OVMS model repository with multiple LLMs and Whisper.
 
 Requirements:
   pip install "optimum[openvino]>=1.18"
@@ -75,14 +75,42 @@ def ensure_whisper_speech2text_layout(model_dir: str | Path) -> None:
     )
 
 MODEL_REPOSITORY = Path("models")
-TINYLLAMA_DIR = MODEL_REPOSITORY / "tinyllama"
 WHISPER_DIR = MODEL_REPOSITORY / "OpenVINO" / "whisper-base-fp16-ov"
 CONFIG_PATH = MODEL_REPOSITORY / "config.json"
 WHISPER_SOURCE_MODEL = "OpenVINO/whisper-base-fp16-ov"
 WHISPER_MODEL_NAME = "whisper-base-fp16-ov"
 TARGET_DEVICE = os.environ.get("OVMS_TARGET_DEVICE", "GPU").upper()
+REQUESTED_LLM_MODELS = {
+    name.strip().lower()
+    for name in os.environ.get(
+        "OVMS_LLM_MODELS",
+        "tinyllama,qwen3-4b,llama-3.2-3b-instruct",
+    ).split(",")
+    if name.strip()
+}
 
-TINYLLAMA_REQUIRED_FILES = [
+LLM_MODELS = [
+    {
+        "name": "tinyllama",
+        "repo_id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+        "directory": MODEL_REPOSITORY / "tinyllama",
+        "extra_export_args": [],
+    },
+    {
+        "name": "qwen3-4b",
+        "repo_id": "Qwen/Qwen3-4B",
+        "directory": MODEL_REPOSITORY / "qwen3-4b",
+        "extra_export_args": ["--trust-remote-code"],
+    },
+    {
+        "name": "llama-3.2-3b-instruct",
+        "repo_id": "meta-llama/Llama-3.2-3B-Instruct",
+        "directory": MODEL_REPOSITORY / "llama-3.2-3b-instruct",
+        "extra_export_args": [],
+    },
+]
+
+LLM_REQUIRED_FILES = [
     "openvino_model.xml",
     "openvino_model.bin",
     "openvino_tokenizer.xml",
@@ -142,7 +170,7 @@ def run(cmd: list[str], *, cwd: Path | None = None) -> None:
     print("+", " ".join(cmd))
     result = subprocess.run(cmd, cwd=cwd, env={**os.environ, "PYTHONUTF8": "1"})
     if result.returncode != 0:
-        sys.exit(result.returncode)
+        raise subprocess.CalledProcessError(result.returncode, cmd)
 
 
 def find_optimum_cli() -> str:
@@ -171,6 +199,15 @@ def validate_target_device() -> None:
         sys.exit(1)
 
 
+def get_enabled_llm_models() -> list[dict[str, object]]:
+    available_names = {str(model["name"]) for model in LLM_MODELS}
+    unknown_names = sorted(REQUESTED_LLM_MODELS - available_names)
+    if unknown_names:
+        print(f"Error: unknown OVMS_LLM_MODELS entries: {', '.join(unknown_names)}")
+        sys.exit(1)
+    return [model for model in LLM_MODELS if str(model["name"]) in REQUESTED_LLM_MODELS]
+
+
 def normalize_path(path: Path) -> str:
     return path.resolve().as_posix()
 
@@ -179,53 +216,75 @@ def has_required_files(model_dir: Path, required_files: list[str]) -> bool:
     return model_dir.is_dir() and all((model_dir / required).exists() for required in required_files)
 
 
-def export_tinyllama() -> None:
-    if has_required_files(TINYLLAMA_DIR, TINYLLAMA_REQUIRED_FILES):
-        print("[skip] TinyLlama is already exported")
+def export_llm_model(model: dict[str, object], cli: str) -> None:
+    model_name = str(model["name"])
+    repo_id = str(model["repo_id"])
+    model_dir = Path(model["directory"])
+    extra_export_args = [str(arg) for arg in model.get("extra_export_args", [])]
+
+    if has_required_files(model_dir, LLM_REQUIRED_FILES):
+        print(f"[skip] {model_name} is already exported")
     else:
         MODEL_REPOSITORY.mkdir(parents=True, exist_ok=True)
-        cli = find_optimum_cli()
-        run(
-            [
-                cli,
-                "export",
-                "openvino",
-                "-m",
-                "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-                "--weight-format",
-                "int8",
-                "--task",
-                "text-generation-with-past",
-                str(TINYLLAMA_DIR),
-            ]
-        )
+        try:
+            run(
+                [
+                    cli,
+                    "export",
+                    "openvino",
+                    "-m",
+                    repo_id,
+                    "--weight-format",
+                    "int8",
+                    "--task",
+                    "text-generation-with-past",
+                    *extra_export_args,
+                    str(model_dir),
+                ]
+            )
+        except subprocess.CalledProcessError as exc:
+            print(f"Error: failed to export {model_name} from {repo_id}.")
+            if repo_id.startswith("meta-llama/"):
+                print("This is a gated Hugging Face repo.")
+                print("Grant access on Hugging Face, then run `huggingface-cli login`.")
+                print("If you want to skip Llama for now, set:")
+                print('  $env:OVMS_LLM_MODELS="tinyllama,qwen3-4b"')
+            raise SystemExit(exc.returncode) from exc
 
-    tinyllama_graph = (
-        TINYLLAMA_GRAPH_TEMPLATE.replace("__MODEL_PATH__", normalize_path(TINYLLAMA_DIR))
+    llm_graph = (
+        TINYLLAMA_GRAPH_TEMPLATE.replace("__MODEL_PATH__", normalize_path(model_dir))
         .replace("__TARGET_DEVICE__", TARGET_DEVICE)
     )
-    (TINYLLAMA_DIR / "graph.pbtxt").write_text(tinyllama_graph, encoding="utf-8")
+    (model_dir / "graph.pbtxt").write_text(llm_graph, encoding="utf-8")
+
+
+def export_llm_models() -> None:
+    cli = find_optimum_cli()
+    for model in get_enabled_llm_models():
+        export_llm_model(model, cli)
 
 
 def write_base_config() -> None:
     MODEL_REPOSITORY.mkdir(parents=True, exist_ok=True)
-    config = {
-        "model_config_list": [
-            {
-                "config": {
-                    "name": "tinyllama",
-                    "base_path": normalize_path(TINYLLAMA_DIR),
-                }
-            },
-            {
-                "config": {
-                    "name": WHISPER_MODEL_NAME,
-                    "base_path": normalize_path(WHISPER_DIR),
-                    "graph_path": "graph.pbtxt",
-                }
+    model_config_list = [
+        {
+            "config": {
+                "name": str(model["name"]),
+                "base_path": normalize_path(Path(model["directory"])),
             }
-        ]
-    }
+        }
+        for model in get_enabled_llm_models()
+    ]
+    model_config_list.append(
+        {
+            "config": {
+                "name": WHISPER_MODEL_NAME,
+                "base_path": normalize_path(WHISPER_DIR),
+                "graph_path": "graph.pbtxt",
+            }
+        }
+    )
+    config = {"model_config_list": model_config_list}
     CONFIG_PATH.write_text(json.dumps(config, indent=4), encoding="utf-8")
 
 
@@ -250,7 +309,7 @@ def prepare_whisper() -> None:
 
 def main() -> None:
     validate_target_device()
-    export_tinyllama()
+    export_llm_models()
     prepare_whisper()
     write_base_config()
     print(f"[done] Prepared OVMS repository in {MODEL_REPOSITORY}")
