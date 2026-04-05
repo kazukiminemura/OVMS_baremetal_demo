@@ -26,6 +26,7 @@ SAMPLE_RATE = 16000
 MODEL_WAIT_TIMEOUT = 60
 MODEL_WAIT_INTERVAL = 2
 CHAT_RETRY_COUNT = 2
+TRANSCRIBE_RETRY_COUNT = 3
 
 
 def record_audio(seconds: int = 5) -> np.ndarray:
@@ -53,7 +54,7 @@ def write_wav(path: str | Path, audio: np.ndarray) -> None:
         wav_file.writeframes(pcm.tobytes())
 
 
-def connect_chat_client() -> OpenAI:
+def connect_chat_client(exit_on_failure: bool = True) -> OpenAI:
     last_error = None
     for url in OVMS_URLS:
         try:
@@ -66,30 +67,43 @@ def connect_chat_client() -> OpenAI:
                 if LLM_MODEL in names and WHISPER_MODEL in names:
                     return client
                 if time.time() >= deadline:
-                    print("OVMS is reachable but required models are not fully loaded.")
-                    print(f"  -> expected: {LLM_MODEL}, {WHISPER_MODEL}")
-                    print("  -> Run `python setup_ovms.py` and `wsl docker compose restart ovms`.")
-                    sys.exit(1)
+                    if exit_on_failure:
+                        print("OVMS is reachable but required models are not fully loaded.")
+                        print(f"  -> expected: {LLM_MODEL}, {WHISPER_MODEL}")
+                        print("  -> Run `python setup_ovms.py`, then restart OVMS with `./start_ovms.ps1`.")
+                        sys.exit(1)
+                    raise RuntimeError("OVMS models are not fully loaded yet.")
                 print("  -> waiting for OVMS to finish loading models...")
                 time.sleep(MODEL_WAIT_INTERVAL)
         except Exception as exc:
             last_error = exc
 
-    print(f"OVMS connection failed: {last_error}")
-    print("  -> Run `wsl docker compose up -d ovms` and try again.")
-    sys.exit(1)
+    if exit_on_failure:
+        print(f"OVMS connection failed: {last_error}")
+        print("  -> Start OVMS with `./start_ovms.ps1` and try again.")
+        sys.exit(1)
+    raise RuntimeError(f"OVMS connection failed: {last_error}")
 
 
-def transcribe_audio(client: OpenAI, audio_path: str | Path) -> str:
-    with open(audio_path, "rb") as audio_file:
-        transcript = client.audio.transcriptions.create(
-            model=WHISPER_MODEL,
-            file=audio_file,
-        )
-    return transcript.text.strip()
+def transcribe_audio(client: OpenAI, audio_path: str | Path) -> tuple[str, OpenAI]:
+    for attempt in range(TRANSCRIBE_RETRY_COUNT + 1):
+        try:
+            with open(audio_path, "rb") as audio_file:
+                transcript = client.audio.transcriptions.create(
+                    model=WHISPER_MODEL,
+                    file=audio_file,
+                )
+            return transcript.text.strip(), client
+        except (APIConnectionError, httpx.HTTPError):
+            if attempt >= TRANSCRIBE_RETRY_COUNT:
+                raise
+            print("[system] OVMS connection lost during transcription. Reconnecting...")
+            time.sleep(MODEL_WAIT_INTERVAL)
+            client = connect_chat_client(exit_on_failure=False)
+    return "", client
 
 
-def stream_chat_completion(client: OpenAI, text: str) -> OpenAI:
+def stream_chat_completion(client: OpenAI, text: str):
     return client.chat.completions.create(
         model=LLM_MODEL,
         messages=[{"role": "user", "content": text}],
@@ -107,8 +121,15 @@ def create_chat_completion(client: OpenAI, text: str):
     )
 
 
+def reconnect_client() -> OpenAI:
+    print("[system] OVMS connection lost. Reconnecting...\n")
+    time.sleep(MODEL_WAIT_INTERVAL)
+    return connect_chat_client(exit_on_failure=False)
+
+
 def main() -> None:
     text_mode = "--text" in sys.argv
+    stream_mode = "--stream" in sys.argv
     wav_file = next((arg for arg in sys.argv[1:] if arg.lower().endswith(".wav")), None)
 
     client = connect_chat_client()
@@ -137,7 +158,7 @@ def main() -> None:
                 audio_path = temp_wav
 
             if audio_path is not None and not text_mode:
-                text = transcribe_audio(client, audio_path)
+                text, client = transcribe_audio(client, audio_path)
                 print(f"[Whisper] {text}\n")
 
             if not text:
@@ -149,29 +170,40 @@ def main() -> None:
             print("[TinyLlama] ", end="", flush=True)
             for attempt in range(CHAT_RETRY_COUNT + 1):
                 try:
-                    for chunk in stream_chat_completion(client, text):
-                        print(chunk.choices[0].delta.content or "", end="", flush=True)
+                    if stream_mode:
+                        for chunk in stream_chat_completion(client, text):
+                            print(chunk.choices[0].delta.content or "", end="", flush=True)
+                    else:
+                        response = create_chat_completion(client, text)
+                        print(response.choices[0].message.content or "", end="", flush=True)
                     print("\n")
                     break
                 except (APIConnectionError, httpx.RemoteProtocolError):
                     if attempt >= CHAT_RETRY_COUNT:
-                        print("\n[system] Streaming failed. Falling back to non-streaming response...\n")
-                        response = create_chat_completion(client, text)
-                        print(response.choices[0].message.content or "", end="", flush=True)
-                        print("\n")
-                        break
-                    print("\n[system] OVMS connection lost. Reconnecting...\n")
-                    time.sleep(MODEL_WAIT_INTERVAL)
-                    client = connect_chat_client()
+                        if stream_mode:
+                            print("\n[system] Streaming failed. Falling back to non-streaming response...\n")
+                            response = create_chat_completion(client, text)
+                            print(response.choices[0].message.content or "", end="", flush=True)
+                            print("\n")
+                            break
+                        raise
+                    client = reconnect_client()
                     print("[TinyLlama] ", end="", flush=True)
                 except httpx.HTTPError:
                     if attempt >= CHAT_RETRY_COUNT:
                         raise
-                    print("\n[system] OVMS connection lost. Reconnecting...\n")
-                    time.sleep(MODEL_WAIT_INTERVAL)
-                    client = connect_chat_client()
+                    client = reconnect_client()
                     print("[TinyLlama] ", end="", flush=True)
+                except RuntimeError as exc:
+                    print(f"\n[system] {exc}")
+                    print("  -> Start OVMS with `./start_ovms.ps1` and try again.\n")
+                    break
 
+            if wav_file:
+                break
+        except (APIConnectionError, RuntimeError):
+            print("\n[system] OVMS connection failed during inference.")
+            print("  -> Start OVMS with `./start_ovms.ps1` and try again.\n")
             if wav_file:
                 break
         finally:

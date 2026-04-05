@@ -1,6 +1,8 @@
-# OVMS Docker Demo - Whisper + TinyLlama
+# OVMS Baremetal Demo - Whisper + TinyLlama
 
-OpenVINO Model Server (OVMS) only demo with a single OVMS container.
+This repository runs OpenVINO Model Server (OVMS) on baremetal.
+The setup follows the official OpenVINO 2026 baremetal deployment guide:
+https://docs.openvino.ai/2026/model-server/ovms_docs_deploying_server_baremetal.html
 
 ```text
 Audio (mic / WAV)
@@ -15,49 +17,75 @@ TinyLlama      -> OVMS (`/v3/chat/completions`, port 8000)
 Response
 ```
 
-## Setup
+## 1. Install OVMS on Windows 11
 
-### 1. Prepare OVMS model repository
+The official guide states that baremetal OVMS for Windows requires Microsoft Visual C++ Redistributable.
 
-```bash
-python setup_ovms.py
+Download the package with Python support:
+
+```powershell
+curl -L https://github.com/openvinotoolkit/model_server/releases/download/v2026.0/ovms_windows_python_on.zip -o ovms.zip
+tar -xf ovms.zip
 ```
 
-`setup_ovms.py` prepares OVMS models for `GPU` by default.
-Docker commands are executed in WSL by default via `wsl docker`.
+This extracts an `ovms\` directory in the repository root.
 
-To force CPU-targeted models explicitly:
+Before starting OVMS in a new PowerShell session, load the environment variables:
 
-```bash
-set OVMS_TARGET_DEVICE=CPU
-python setup_ovms.py
+```powershell
+.\ovms\setupvars.ps1
 ```
 
-This prepares a single `models/` repository for OVMS:
+## 2. Install Python packages
 
-- exports `TinyLlama/TinyLlama-1.1B-Chat-v1.0` into `models/tinyllama/`
-- pulls `OpenVINO/whisper-base-fp16-ov` into `models/whisper-base-fp16-ov/`
-- creates `models/config.json` for both models
-
-### 2. Start OVMS
-
-```bash
-wsl docker compose up -d ovms
-```
-
-The single `ovms` service serves both TinyLlama and Whisper on port `8000`.
-The OVMS container uses the GPU-capable image. Actual model target device is chosen when running `setup_ovms.py`.
-For WSL GPU execution, the compose file exposes `/dev/dxg` and mounts `/usr/lib/wsl` into the container.
-
-### 3. Install Python packages
-
-```bash
+```powershell
 pip install -r requirements.txt
 ```
 
-## Run
+`setup_ovms.py` uses:
 
-```bash
+- `optimum-cli` to export TinyLlama to OpenVINO
+- `huggingface_hub` to download the Whisper OpenVINO model repository
+
+## 3. Prepare the OVMS model repository
+
+```powershell
+python setup_ovms.py
+```
+
+`setup_ovms.py` now:
+
+- exports `TinyLlama/TinyLlama-1.1B-Chat-v1.0` into `models/tinyllama/`
+- downloads `OpenVINO/whisper-base-fp16-ov` into `models/OpenVINO/whisper-base-fp16-ov/`
+- creates `models/config.json` with host absolute paths for baremetal OVMS
+- writes `models/tinyllama/graph.pbtxt` with the local TinyLlama path
+
+To force CPU-targeted LLM serving:
+
+```powershell
+$env:OVMS_TARGET_DEVICE="CPU"
+python setup_ovms.py
+```
+
+Default is `GPU`.
+
+## 4. Start OVMS on baremetal
+
+After `.\ovms\setupvars.ps1` has been executed:
+
+```powershell
+.\start_ovms.ps1
+```
+
+This starts OVMS with:
+
+```powershell
+ovms --config_path .\models\config.json --rest_port 8000
+```
+
+## 5. Run the demo
+
+```powershell
 # microphone mode
 python demo.py
 
@@ -68,34 +96,17 @@ python demo.py audio.wav
 python demo.py --text
 ```
 
-If you change `OVMS_TARGET_DEVICE` or regenerate models, restart OVMS:
-
-```bash
-wsl docker compose restart ovms
-```
-
 ## Files
 
 | File | Purpose |
 |---|---|
-| `docker-compose.yml` | Single OVMS service |
 | `demo.py` | Client app using OVMS OpenAI-compatible APIs |
-| `setup_ovms.py` | Prepares TinyLlama, Whisper, and `config.json` for OVMS |
+| `setup_ovms.py` | Prepares TinyLlama, Whisper, and `config.json` for baremetal OVMS |
+| `start_ovms.ps1` | Starts local OVMS with the generated config |
 | `requirements.txt` | Python runtime dependencies |
-
-## Notes
-
-- TinyLlama runs through OVMS chat completions.
-- Whisper runs through OVMS audio transcriptions.
-- Both models are mounted into one OVMS container via `./models:/models`.
-- GPU mode assumes Docker is running inside WSL with GPU support available through `/dev/dxg`.
 
 ## Troubleshooting
 
-- If `python demo.py` prints `OVMS connected ... []`, OVMS is running but failed to load the models. Re-run `python setup_ovms.py` and then `wsl docker compose restart ovms`.
-- If OVMS logs show `Available devices for Open VINO: CPU`, GPU is not exposed to the container. Set `OVMS_TARGET_DEVICE=CPU`, rerun `python setup_ovms.py`, and restart OVMS.
-- If you want to inspect OVMS errors directly, run:
-
-```bash
-wsl docker compose logs ovms --tail=200
-```
+- If `python demo.py` prints `OVMS connected ... []`, OVMS started but the models did not load. Run `python setup_ovms.py` again and restart `.\start_ovms.ps1`.
+- If `.\start_ovms.ps1` cannot find `ovms`, run `.\ovms\setupvars.ps1` in the current PowerShell session first.
+- If GPU execution is unavailable, set `$env:OVMS_TARGET_DEVICE="CPU"` and rerun `python setup_ovms.py`.

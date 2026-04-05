@@ -4,26 +4,26 @@ Prepare a single OVMS model repository with TinyLlama and Whisper.
 
 Requirements:
   pip install "optimum[openvino]>=1.18"
-  docker
+  pip install "huggingface_hub>=0.23"
 """
 from __future__ import annotations
 
 import json
 import os
-import shlex
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+from huggingface_hub import snapshot_download
+
 MODEL_REPOSITORY = Path("models")
 TINYLLAMA_DIR = MODEL_REPOSITORY / "tinyllama"
+WHISPER_DIR = MODEL_REPOSITORY / "OpenVINO" / "whisper-base-fp16-ov"
 CONFIG_PATH = MODEL_REPOSITORY / "config.json"
 WHISPER_SOURCE_MODEL = "OpenVINO/whisper-base-fp16-ov"
 WHISPER_MODEL_NAME = "whisper-base-fp16-ov"
-OVMS_IMAGE = "openvino/model_server:latest-gpu"
 TARGET_DEVICE = os.environ.get("OVMS_TARGET_DEVICE", "GPU").upper()
-DOCKER_CMD = shlex.split(os.environ.get("OVMS_DOCKER_CMD", "wsl docker"))
 
 TINYLLAMA_REQUIRED_FILES = [
     "openvino_model.xml",
@@ -33,8 +33,19 @@ TINYLLAMA_REQUIRED_FILES = [
     "openvino_detokenizer.xml",
     "openvino_detokenizer.bin",
 ]
+WHISPER_REQUIRED_FILES = [
+    "openvino_encoder_model.xml",
+    "openvino_encoder_model.bin",
+    "openvino_decoder_model.xml",
+    "openvino_decoder_model.bin",
+    "openvino_tokenizer.xml",
+    "openvino_tokenizer.bin",
+    "openvino_detokenizer.xml",
+    "openvino_detokenizer.bin",
+    "graph.pbtxt",
+]
 
-TINYLLAMA_GRAPH = """input_stream: "HTTP_REQUEST_PAYLOAD:input"
+TINYLLAMA_GRAPH_TEMPLATE = """input_stream: "HTTP_REQUEST_PAYLOAD:input"
 output_stream: "HTTP_RESPONSE_PAYLOAD:output"
 node {
   name: "LLMExecutor"
@@ -50,7 +61,7 @@ node {
   }
   node_options: {
     [type.googleapis.com/mediapipe.LLMCalculatorOptions]: {
-      models_path: "/models/tinyllama",
+      models_path: "__MODEL_PATH__",
       cache_size: 10,
       max_num_batched_tokens: 512,
       max_num_seqs: 256,
@@ -69,7 +80,6 @@ node {
   }
 }
 """
-TINYLLAMA_GRAPH = TINYLLAMA_GRAPH.replace("__TARGET_DEVICE__", TARGET_DEVICE)
 
 
 def run(cmd: list[str], *, cwd: Path | None = None) -> None:
@@ -77,18 +87,6 @@ def run(cmd: list[str], *, cwd: Path | None = None) -> None:
     result = subprocess.run(cmd, cwd=cwd, env={**os.environ, "PYTHONUTF8": "1"})
     if result.returncode != 0:
         sys.exit(result.returncode)
-
-
-def capture(cmd: list[str]) -> str:
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        env={**os.environ, "PYTHONUTF8": "1"},
-    )
-    if result.returncode != 0:
-        sys.exit(result.returncode)
-    return result.stdout.strip()
 
 
 def find_optimum_cli() -> str:
@@ -111,23 +109,14 @@ def find_optimum_cli() -> str:
     return cli
 
 
-def ensure_tool(name: str) -> None:
-    if shutil.which(name) is None:
-        print(f"Error: `{name}` was not found in PATH.")
-        sys.exit(1)
-
-
 def validate_target_device() -> None:
     if TARGET_DEVICE not in {"CPU", "GPU"}:
         print("Error: OVMS_TARGET_DEVICE must be CPU or GPU.")
         sys.exit(1)
 
 
-def get_repo_mount_path() -> str:
-    repo_path = MODEL_REPOSITORY.resolve()
-    if DOCKER_CMD[:1] == ["wsl"]:
-        return capture(["wsl", "wslpath", "-a", str(repo_path)])
-    return str(repo_path)
+def normalize_path(path: Path) -> str:
+    return path.resolve().as_posix()
 
 
 def has_required_files(model_dir: Path, required_files: list[str]) -> bool:
@@ -155,7 +144,11 @@ def export_tinyllama() -> None:
             ]
         )
 
-    (TINYLLAMA_DIR / "graph.pbtxt").write_text(TINYLLAMA_GRAPH, encoding="utf-8")
+    tinyllama_graph = (
+        TINYLLAMA_GRAPH_TEMPLATE.replace("__MODEL_PATH__", normalize_path(TINYLLAMA_DIR))
+        .replace("__TARGET_DEVICE__", TARGET_DEVICE)
+    )
+    (TINYLLAMA_DIR / "graph.pbtxt").write_text(tinyllama_graph, encoding="utf-8")
 
 
 def write_base_config() -> None:
@@ -165,13 +158,13 @@ def write_base_config() -> None:
             {
                 "config": {
                     "name": "tinyllama",
-                    "base_path": "/models/tinyllama",
+                    "base_path": normalize_path(TINYLLAMA_DIR),
                 }
             },
             {
                 "config": {
                     "name": WHISPER_MODEL_NAME,
-                    "base_path": f"/models/OpenVINO/{WHISPER_MODEL_NAME}",
+                    "base_path": normalize_path(WHISPER_DIR),
                 }
             }
         ]
@@ -180,43 +173,31 @@ def write_base_config() -> None:
 
 
 def prepare_whisper() -> None:
-    repo_mount = f"{get_repo_mount_path()}:/models"
-    run(
-        DOCKER_CMD
-        + [
-            "run",
-            "--rm",
-            "-v",
-            repo_mount,
-            OVMS_IMAGE,
-            "--pull",
-            "--source_model",
-            WHISPER_SOURCE_MODEL,
-            "--model_repository_path",
-            "/models",
-            "--model_name",
-            WHISPER_MODEL_NAME,
-            "--target_device",
-            TARGET_DEVICE,
-            "--task",
-            "speech2text",
-        ]
+    if has_required_files(WHISPER_DIR, WHISPER_REQUIRED_FILES):
+        print("[skip] Whisper is already downloaded")
+        return
+
+    WHISPER_DIR.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_download(
+        repo_id=WHISPER_SOURCE_MODEL,
+        local_dir=str(WHISPER_DIR),
+        local_dir_use_symlinks=False,
     )
-    git_dir = MODEL_REPOSITORY / "OpenVINO" / WHISPER_MODEL_NAME / ".git"
+
+    git_dir = WHISPER_DIR / ".git"
     if git_dir.exists():
         shutil.rmtree(git_dir)
 
 
 def main() -> None:
     validate_target_device()
-    ensure_tool(DOCKER_CMD[0])
     export_tinyllama()
-    write_base_config()
     prepare_whisper()
+    write_base_config()
     print(f"[done] Prepared OVMS repository in {MODEL_REPOSITORY}")
     print(f"[done] Target device: {TARGET_DEVICE}")
-    print(f"[done] Docker command: {' '.join(DOCKER_CMD)}")
-    print("Next: wsl docker compose up -d ovms")
+    print(f"[done] OVMS config: {CONFIG_PATH.resolve()}")
+    print("Next: run `./start_ovms.ps1` after sourcing your OVMS setupvars script.")
 
 
 if __name__ == "__main__":
