@@ -4,17 +4,13 @@ This repository runs OpenVINO Model Server (OVMS) on baremetal.
 The setup follows the official OpenVINO 2026 baremetal deployment guide:
 https://docs.openvino.ai/2026/model-server/ovms_docs_deploying_server_baremetal.html
 
-```text
-Audio (mic / WAV)
-    |
-    v
-Whisper        -> OVMS (`/v3/audio/transcriptions`, port 8000)
-    |
-    v
-LLM            -> OVMS (`/v3/chat/completions`, port 8000)
-    |
-    v
-Response
+```mermaid
+flowchart TD
+    A["Audio<br/>(mic / WAV)"] --> B["Whisper"]
+    B --> C["OVMS<br/>/v3/audio/transcriptions<br/>port 8000"]
+    C --> D["LLM"]
+    D --> E["OVMS<br/>/v3/chat/completions<br/>port 8000"]
+    E --> F["Response"]
 ```
 
 ## 1. Install OVMS on Windows 11
