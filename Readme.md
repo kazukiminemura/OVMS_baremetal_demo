@@ -5,7 +5,7 @@ The setup follows the official OpenVINO 2026 baremetal deployment guide:
 https://docs.openvino.ai/2026/model-server/ovms_docs_deploying_server_baremetal.html
 
 ```mermaid
-flowchart TD
+flowchart LR
     A["Client<br/>mic / WAV"] --> B["OVMS REST API<br/>/v3/audio/transcriptions<br/>port 8000"]
 
     subgraph OVMS["OpenVINO Model Server"]
