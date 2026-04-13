@@ -7,15 +7,19 @@ https://docs.openvino.ai/2026/model-server/ovms_docs_deploying_server_baremetal.
 ```mermaid
 flowchart TD
     A["Client<br/>mic / WAV"] --> B["OVMS REST API<br/>/v3/audio/transcriptions<br/>port 8000"]
-    A --> C["OVMS REST API<br/>/v3/chat/completions<br/>port 8000"]
 
     subgraph OVMS["OpenVINO Model Server"]
         B --> D["Whisper"]
-        C --> E["LLM"]
     end
 
-    D --> C
-    E --> F["Response"]
+    D --> C["Client<br/>transcribed text"]
+    C --> E["OVMS REST API<br/>/v3/chat/completions<br/>port 8000"]
+
+    subgraph OVMS_LLM["OpenVINO Model Server"]
+        E --> F["LLM"]
+    end
+
+    F --> G["Client<br/>response"]
 ```
 
 ## 1. Install OVMS on Windows 11
